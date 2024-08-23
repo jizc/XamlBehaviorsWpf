@@ -74,6 +74,12 @@ namespace Microsoft.Xaml.Behaviors.Input
         private void OnKeyPress(object sender, KeyEventArgs e)
         {
             bool isKeyMatch = e.Key == this.Key;
+            // Handle the scenario where the Alt key is pressed (reported as Key.System), allowing the main key to be detected correctly.
+            if (e.Key == Key.System)
+            {
+                // Check if the actual key being held (e.SystemKey) matches the developer-defined key.
+                isKeyMatch = e.SystemKey == this.Key;
+            }
 
             // Get the actual modifiers considering special keys like LeftCtrl, RightCtrl, etc.
             ModifierKeys actualModifiers = GetActualModifiers();
