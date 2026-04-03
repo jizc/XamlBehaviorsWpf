@@ -134,6 +134,15 @@ namespace Microsoft.Xaml.Behaviors.Layout
         private static DateTime lastPurgeTime = DateTime.MinValue;
         private static readonly TimeSpan purgeInterval = TimeSpan.FromSeconds(1.0);
 
+        /// <summary>
+        /// Resets the purge throttle so the next LayoutUpdated pass triggers an immediate purge.
+        /// Intended for unit tests only.
+        /// </summary>
+        internal static void ResetPurgeThrottle()
+        {
+            lastPurgeTime = DateTime.MinValue;
+        }
+
         protected override void OnAttached()
         {
             base.OnAttached();
@@ -488,6 +497,9 @@ namespace Microsoft.Xaml.Behaviors.Layout
 
         internal static bool StoryboardDictionaryContainsKey(object key)
             => transitionStoryboardDictionary.ContainsKey(key);
+
+        internal static void ClearStoryboardDictionary()
+            => transitionStoryboardDictionary.Clear();
 
         protected override bool ShouldSkipInitialLayout
         {

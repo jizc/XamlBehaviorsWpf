@@ -8,6 +8,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Animation;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Microsoft.Xaml.Behaviors;
 using Microsoft.Xaml.Behaviors.Layout;
 
 namespace Microsoft.Xaml.Interactions.UnitTests
@@ -20,6 +21,7 @@ namespace Microsoft.Xaml.Interactions.UnitTests
         {
             // Clear static dictionaries before each test to avoid cross-test contamination.
             FluidMoveBehaviorBase.TagDictionary.Clear();
+            FluidMoveBehavior.ClearStoryboardDictionary();
         }
 
         #region TagData WeakReference Tests
@@ -283,6 +285,185 @@ namespace Microsoft.Xaml.Interactions.UnitTests
 
             Assert.IsFalse(FluidMoveBehavior.StoryboardDictionaryContainsKey(orphanKey),
                 "Storyboard entry with no corresponding TagDictionary entry should be removed.");
+        }
+
+        #endregion
+
+        #region Retention Tests (end-to-end with real visual tree)
+
+        /// <summary>
+        /// Pumps the WPF dispatcher so that layout, data binding, and Loaded/Unloaded events
+        /// are processed. Calls DispatcherHelper.ClearFrames which pushes a frame until SystemIdle.
+        /// </summary>
+        private static void PumpDispatcher()
+        {
+            DispatcherHelper.ClearFrames(System.Windows.Threading.Dispatcher.CurrentDispatcher);
+        }
+
+        [TestMethod]
+        public void Retention_ElementTypeEntries_RemovedAfterChildRemovedFromPanel()
+        {
+            FluidMoveBehaviorBase.ResetPurgeThrottle();
+
+            var window = new Window { Width = 200, Height = 200 };
+            var panel = new StackPanel();
+            var behavior = new FluidMoveBehavior
+            {
+                AppliesTo = FluidMoveScope.Children,
+                Duration = new Duration(TimeSpan.FromMilliseconds(0))
+            };
+            Interaction.GetBehaviors(panel).Add(behavior);
+            window.Content = panel;
+
+            var child1 = new Button { Width = 50, Height = 50 };
+            var child2 = new Button { Width = 50, Height = 50 };
+            panel.Children.Add(child1);
+            panel.Children.Add(child2);
+
+            try
+            {
+                window.Show();
+                PumpDispatcher();
+
+                // Entries should exist for both children (element-type keys).
+                Assert.IsTrue(FluidMoveBehaviorBase.TagDictionary.ContainsKey(child1),
+                    "child1 should be tracked after layout.");
+                Assert.IsTrue(FluidMoveBehaviorBase.TagDictionary.ContainsKey(child2),
+                    "child2 should be tracked after layout.");
+
+                // Remove child1 from the panel.
+                panel.Children.Remove(child1);
+
+                // First pump processes: layout pass + LayoutUpdated (Render priority),
+                // then Unloaded fires (Loaded priority, lower) setting IsLoaded = false.
+                // The purge runs during the first LayoutUpdated but misses child1 because
+                // IsLoaded is still true at Render priority. After this pump, IsLoaded is false.
+                PumpDispatcher();
+
+                // Reset throttle and force another layout pass so the purge runs again,
+                // this time seeing IsLoaded == false.
+                FluidMoveBehaviorBase.ResetPurgeThrottle();
+                panel.InvalidateArrange();
+                PumpDispatcher();
+
+                Assert.IsFalse(FluidMoveBehaviorBase.TagDictionary.ContainsKey(child1),
+                    "Removed child's entry should be purged from TagDictionary.");
+                Assert.IsTrue(FluidMoveBehaviorBase.TagDictionary.ContainsKey(child2),
+                    "Remaining child's entry should survive.");
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+
+        [TestMethod]
+        public void Retention_ElementTypeEntries_SurviveReparenting()
+        {
+            FluidMoveBehaviorBase.ResetPurgeThrottle();
+
+            var window = new Window { Width = 300, Height = 200 };
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+            grid.ColumnDefinitions.Add(new ColumnDefinition());
+
+            var panelA = new StackPanel();
+            var panelB = new StackPanel();
+            Grid.SetColumn(panelA, 0);
+            Grid.SetColumn(panelB, 1);
+            grid.Children.Add(panelA);
+            grid.Children.Add(panelB);
+
+            var behaviorA = new FluidMoveBehavior
+            {
+                AppliesTo = FluidMoveScope.Children,
+                Duration = new Duration(TimeSpan.FromMilliseconds(0))
+            };
+            var behaviorB = new FluidMoveBehavior
+            {
+                AppliesTo = FluidMoveScope.Children,
+                Duration = new Duration(TimeSpan.FromMilliseconds(0))
+            };
+            Interaction.GetBehaviors(panelA).Add(behaviorA);
+            Interaction.GetBehaviors(panelB).Add(behaviorB);
+
+            window.Content = grid;
+
+            var child = new Button { Width = 50, Height = 50 };
+            panelA.Children.Add(child);
+
+            try
+            {
+                window.Show();
+                PumpDispatcher();
+
+                Assert.IsTrue(FluidMoveBehaviorBase.TagDictionary.ContainsKey(child),
+                    "child should be tracked in panelA.");
+
+                // Reparent: move child from panelA to panelB.
+                panelA.Children.Remove(child);
+                panelB.Children.Add(child);
+
+                PumpDispatcher();
+                FluidMoveBehaviorBase.ResetPurgeThrottle();
+                panelB.InvalidateArrange();
+                PumpDispatcher();
+
+                // The entry should survive reparenting — the child is loaded in panelB.
+                Assert.IsTrue(FluidMoveBehaviorBase.TagDictionary.ContainsKey(child),
+                    "child's entry should survive reparenting (still loaded in panelB).");
+            }
+            finally
+            {
+                window.Close();
+            }
+        }
+
+        [TestMethod]
+        public void Retention_AllChildrenRemoved_EntriesEventuallyPurged()
+        {
+            FluidMoveBehaviorBase.ResetPurgeThrottle();
+
+            var window = new Window { Width = 200, Height = 200 };
+            var panel = new StackPanel();
+            var behavior = new FluidMoveBehavior
+            {
+                AppliesTo = FluidMoveScope.Children,
+                Duration = new Duration(TimeSpan.FromMilliseconds(0))
+            };
+            Interaction.GetBehaviors(panel).Add(behavior);
+            window.Content = panel;
+
+            var child1 = new Button { Width = 50, Height = 50 };
+            var child2 = new Button { Width = 50, Height = 50 };
+            panel.Children.Add(child1);
+            panel.Children.Add(child2);
+
+            try
+            {
+                window.Show();
+                PumpDispatcher();
+
+                int initialCount = FluidMoveBehaviorBase.TagDictionary.Count;
+                Assert.IsTrue(initialCount >= 2, "Should have at least 2 entries.");
+
+                // Remove ALL children.
+                panel.Children.Clear();
+
+                PumpDispatcher(); // processes layout + Unloaded
+                FluidMoveBehaviorBase.ResetPurgeThrottle();
+                panel.InvalidateArrange();
+                PumpDispatcher(); // purge now sees IsLoaded == false
+
+                Assert.IsFalse(FluidMoveBehaviorBase.TagDictionary.ContainsKey(child1),
+                    "child1 entry should be purged after removal.");
+                Assert.IsFalse(FluidMoveBehaviorBase.TagDictionary.ContainsKey(child2),
+                    "child2 entry should be purged after removal.");
+            }
+            finally
+            {
+                window.Close();
+            }
         }
 
         #endregion
