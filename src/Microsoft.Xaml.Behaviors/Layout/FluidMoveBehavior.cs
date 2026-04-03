@@ -153,10 +153,9 @@ namespace Microsoft.Xaml.Behaviors.Layout
                 return;
             }
 
-            // Periodically purge dead entries from both static dictionaries.
-            // An entry is dead if:
-            //   - The child WeakReference has been collected (DataContext-type tags)
-            //   - The key is a FrameworkElement that is no longer loaded (Element-type tags)
+            // Throttled dead-entry purge. Removes entries whose tracked element has been
+            // garbage-collected (IsAlive == false) or removed from the visual tree (IsLoaded == false).
+            // Running on every LayoutUpdated would be too expensive for panels with many children.
             if (DateTime.Now - lastPurgeTime >= purgeInterval)
             {
                 lastPurgeTime = DateTime.Now;
@@ -164,12 +163,13 @@ namespace Microsoft.Xaml.Behaviors.Layout
                 List<object> deadTags = null;
                 foreach (KeyValuePair<object, TagData> pair in TagDictionary)
                 {
-                    if (!pair.Value.IsAlive || (pair.Key is FrameworkElement fe && !fe.IsLoaded))
+                    // DataContext-type key: child WeakRef dead means the element is gone.
+                    // Element-type key: the key IS the FrameworkElement; IsLoaded==false means removed from tree.
+                    bool isDead = !pair.Value.IsAlive ||
+                                  (pair.Key is FrameworkElement fe && !fe.IsLoaded);
+                    if (isDead)
                     {
-                        if (deadTags == null)
-                        {
-                            deadTags = new List<object>();
-                        }
+                        if (deadTags == null) deadTags = new List<object>();
                         deadTags.Add(pair.Key);
                     }
                 }
@@ -177,9 +177,7 @@ namespace Microsoft.Xaml.Behaviors.Layout
                 if (deadTags != null)
                 {
                     foreach (object tag in deadTags)
-                    {
                         TagDictionary.Remove(tag);
-                    }
                 }
 
                 FluidMoveBehavior.PurgeDeadStoryboards();
@@ -303,6 +301,13 @@ namespace Microsoft.Xaml.Behaviors.Layout
         {
             TagData tagData;
             bool gotData = TagDictionary.TryGetValue(tag, out tagData);
+
+            // Eagerly remove entries with dead weak references rather than waiting for the periodic purge.
+            if (gotData && !tagData.IsAlive)
+            {
+                gotData = false;
+                TagDictionary.Remove(tag);
+            }
 
             if (!gotData)
             {
@@ -431,51 +436,58 @@ namespace Microsoft.Xaml.Behaviors.Layout
         private static bool GetHasTransformWrapper(DependencyObject obj) { return (bool)obj.GetValue(hasTransformWrapperProperty); }
         private static void SetHasTransformWrapper(DependencyObject obj, bool value) { obj.SetValue(hasTransformWrapperProperty, value); }
 
-        internal static Dictionary<object, Storyboard> TransitionStoryboardDictionary = new Dictionary<object, Storyboard>();
+        private static Dictionary<object, Storyboard> transitionStoryboardDictionary = new Dictionary<object, Storyboard>();
 
         /// <summary>
-        /// Removes entries from transitionStoryboardDictionary whose associated elements are no longer alive.
+        /// Removes entries from <see cref="transitionStoryboardDictionary"/> whose elements have left
+        /// the visual tree or whose tracked child has been garbage-collected.
         /// </summary>
         internal static void PurgeDeadStoryboards()
         {
             List<object> deadTags = null;
-            foreach (var pair in TransitionStoryboardDictionary)
+            foreach (KeyValuePair<object, Storyboard> pair in transitionStoryboardDictionary)
             {
-                bool isDead = false;
-
-                // Element-type keys: the key is a FrameworkElement
-                if (pair.Key is FrameworkElement fe && !fe.IsLoaded)
+                bool isDead;
+                if (pair.Key is FrameworkElement fe)
                 {
-                    isDead = true;
+                    // Element-type key: safe to remove when the element is no longer in the tree.
+                    isDead = !fe.IsLoaded;
                 }
-                // DataContext-type keys: cross-check TagDictionary to see if the element is still alive
-                else if (TagDictionary.TryGetValue(pair.Key, out var td) && !td.IsAlive)
+                else
                 {
-                    isDead = true;
+                    // DataContext-type key: remove when the corresponding TagDictionary entry is dead.
+                    TagData tagData;
+                    isDead = !TagDictionary.TryGetValue(pair.Key, out tagData) || !tagData.IsAlive;
                 }
 
                 if (isDead)
                 {
-                    if (deadTags == null)
-                    {
-                        deadTags = new List<object>();
-                    }
+                    if (deadTags == null) deadTags = new List<object>();
                     deadTags.Add(pair.Key);
                 }
             }
+
             if (deadTags != null)
             {
                 foreach (object tag in deadTags)
                 {
                     Storyboard sb;
-                    if (TransitionStoryboardDictionary.TryGetValue(tag, out sb))
+                    if (transitionStoryboardDictionary.TryGetValue(tag, out sb))
                     {
                         sb.Stop();
-                        TransitionStoryboardDictionary.Remove(tag);
+                        transitionStoryboardDictionary.Remove(tag);
                     }
                 }
             }
         }
+
+        // Test helpers — allow unit tests to inject and query transitionStoryboardDictionary
+        // without exposing it publicly. Gated by InternalsVisibleTo in AssemblyInfo.cs.
+        internal static void InjectStoryboardEntry(object key, Storyboard storyboard)
+            => transitionStoryboardDictionary[key] = storyboard;
+
+        internal static bool StoryboardDictionaryContainsKey(object key)
+            => transitionStoryboardDictionary.ContainsKey(key);
 
         protected override bool ShouldSkipInitialLayout
         {
@@ -529,9 +541,9 @@ namespace Microsoft.Xaml.Behaviors.Layout
         {
             object tag = GetIdentityTag(child) ?? child;
             Storyboard storyboard;
-            if (TransitionStoryboardDictionary.TryGetValue(tag, out storyboard))
+            if (transitionStoryboardDictionary.TryGetValue(tag, out storyboard))
             {
-                TransitionStoryboardDictionary.Remove(tag);
+                transitionStoryboardDictionary.Remove(tag);
                 storyboard.Stop();
             }
         }
@@ -548,6 +560,13 @@ namespace Microsoft.Xaml.Behaviors.Layout
             // Locate the previous tag, and the parent-relative previous rect. The previous rect is computed using the app-relative rect if switching parents.
             // Note that we do not use the app-relative rect all time time, because when the parent itself moves, it accounts for all the motion and we do not have to.
             bool gotData = TagDictionary.TryGetValue(tag, out tagData);
+
+            // Eagerly remove entries with dead weak references rather than waiting for the periodic purge.
+            if (gotData && !tagData.IsAlive)
+            {
+                gotData = false;
+                TagDictionary.Remove(tag);
+            }
 
             // if spawn point has changed then throw away the old one
             if (gotData && tagData.InitialTag != initialTag)
@@ -586,7 +605,7 @@ namespace Microsoft.Xaml.Behaviors.Layout
             FrameworkElement originalChild = child;
 
             if ((!FluidMoveBehavior.IsEmptyRect(previousRect) && !FluidMoveBehavior.IsEmptyRect(newTagData.ParentRect)) && (!IsClose(previousRect.Left, newTagData.ParentRect.Left) || !IsClose(previousRect.Top, newTagData.ParentRect.Top)) ||
-                (child != tagData.Child && TransitionStoryboardDictionary.ContainsKey(tag)))
+                (child != tagData.Child && transitionStoryboardDictionary.ContainsKey(tag)))
             {
                 Rect currentRect = previousRect;
                 bool forceFloatAbove = false;
@@ -594,7 +613,7 @@ namespace Microsoft.Xaml.Behaviors.Layout
                 // If this element was animating before, append its current transform to the start position and kill the old animation.
                 // Note that in an overlay scenario, the animation is on the image in the overlay.
                 Storyboard oldTransitionStoryboard = null;
-                if (TransitionStoryboardDictionary.TryGetValue(tag, out oldTransitionStoryboard))
+                if (transitionStoryboardDictionary.TryGetValue(tag, out oldTransitionStoryboard))
                 {
                     FrameworkElement previousChild = tagData.Child; // cache: may be null if GC'd
 
@@ -620,7 +639,7 @@ namespace Microsoft.Xaml.Behaviors.Layout
                         currentRect = transform.TransformBounds(currentRect);
                     }
 
-                    TransitionStoryboardDictionary.Remove(tag);
+                    transitionStoryboardDictionary.Remove(tag);
                     oldTransitionStoryboard.Stop();
                     oldTransitionStoryboard = null;
 
@@ -681,14 +700,14 @@ namespace Microsoft.Xaml.Behaviors.Layout
                 Storyboard transitionStoryboard = CreateTransitionStoryboard(child, usingBeforeLoaded, ref parentRect, ref currentRect);
 
                 // Put this storyboard in the running dictionary so we can detect reentrancy
-                TransitionStoryboardDictionary.Add(tag, transitionStoryboard);
+                transitionStoryboardDictionary.Add(tag, transitionStoryboard);
 
                 transitionStoryboard.Completed += delegate (object sender, EventArgs e)
                 {
                     Storyboard currentlyRunningStoryboard;
-                    if (TransitionStoryboardDictionary.TryGetValue(tag, out currentlyRunningStoryboard) && currentlyRunningStoryboard == transitionStoryboard)
+                    if (transitionStoryboardDictionary.TryGetValue(tag, out currentlyRunningStoryboard) && currentlyRunningStoryboard == transitionStoryboard)
                     {
-                        TransitionStoryboardDictionary.Remove(tag);
+                        transitionStoryboardDictionary.Remove(tag);
                         transitionStoryboard.Stop();
                         RemoveTransform(child);
                         child.InvalidateMeasure();

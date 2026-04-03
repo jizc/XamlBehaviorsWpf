@@ -20,7 +20,6 @@ namespace Microsoft.Xaml.Interactions.UnitTests
         {
             // Clear static dictionaries before each test to avoid cross-test contamination.
             FluidMoveBehaviorBase.TagDictionary.Clear();
-            FluidMoveBehavior.TransitionStoryboardDictionary.Clear();
         }
 
         #region TagData WeakReference Tests
@@ -148,8 +147,8 @@ namespace Microsoft.Xaml.Interactions.UnitTests
         public void TagDictionary_PurgesEntryWhenElementKeyUnloaded()
         {
             // Simulate an Element-type tag: the key IS the FrameworkElement.
-            // An unloaded element (never added to visual tree) has IsLoaded = false.
-            var element = new Button(); // not added to any visual tree, so IsLoaded = false
+            // An element never added to a visual tree has IsLoaded == false.
+            var element = new Button();
             var tagData = new FluidMoveBehaviorBase.TagData
             {
                 Child = element,
@@ -170,7 +169,7 @@ namespace Microsoft.Xaml.Interactions.UnitTests
         [TestMethod]
         public void TagDictionary_DoesNotPurgeAliveEntries()
         {
-            // Entry with a live child and non-element key should survive purge.
+            // Entry with a live child and a non-element key should survive purge.
             string key = "alive-item";
             var element = new Button();
             var tagData = new FluidMoveBehaviorBase.TagData
@@ -213,21 +212,18 @@ namespace Microsoft.Xaml.Interactions.UnitTests
             List<object> deadTags = null;
             foreach (KeyValuePair<object, FluidMoveBehaviorBase.TagData> pair in FluidMoveBehaviorBase.TagDictionary)
             {
-                if (!pair.Value.IsAlive || (pair.Key is FrameworkElement fe && !fe.IsLoaded))
+                bool isDead = !pair.Value.IsAlive ||
+                              (pair.Key is FrameworkElement fe && !fe.IsLoaded);
+                if (isDead)
                 {
-                    if (deadTags == null)
-                    {
-                        deadTags = new List<object>();
-                    }
+                    if (deadTags == null) deadTags = new List<object>();
                     deadTags.Add(pair.Key);
                 }
             }
             if (deadTags != null)
             {
                 foreach (object tag in deadTags)
-                {
                     FluidMoveBehaviorBase.TagDictionary.Remove(tag);
-                }
             }
         }
 
@@ -239,15 +235,15 @@ namespace Microsoft.Xaml.Interactions.UnitTests
         public void PurgeDeadStoryboards_RemovesEntryForUnloadedElementKey()
         {
             // An unloaded element key should be purged from the storyboard dictionary.
-            var element = new Button(); // not in visual tree, IsLoaded = false
+            var element = new Button(); // not in visual tree, IsLoaded == false
             var storyboard = new Storyboard();
 
-            FluidMoveBehavior.TransitionStoryboardDictionary.Add(element, storyboard);
-            Assert.IsTrue(FluidMoveBehavior.TransitionStoryboardDictionary.ContainsKey(element));
+            FluidMoveBehavior.InjectStoryboardEntry(element, storyboard);
+            Assert.IsTrue(FluidMoveBehavior.StoryboardDictionaryContainsKey(element));
 
             FluidMoveBehavior.PurgeDeadStoryboards();
 
-            Assert.IsFalse(FluidMoveBehavior.TransitionStoryboardDictionary.ContainsKey(element),
+            Assert.IsFalse(FluidMoveBehavior.StoryboardDictionaryContainsKey(element),
                 "Storyboard entry with unloaded element key should be removed after purge.");
         }
 
@@ -259,7 +255,7 @@ namespace Microsoft.Xaml.Interactions.UnitTests
             string dataContextKey = "dc-item";
             var storyboard = new Storyboard();
 
-            FluidMoveBehavior.TransitionStoryboardDictionary.Add(dataContextKey, storyboard);
+            FluidMoveBehavior.InjectStoryboardEntry(dataContextKey, storyboard);
             AddEphemeralTagDataEntry(dataContextKey);
 
             GC.Collect();
@@ -268,8 +264,25 @@ namespace Microsoft.Xaml.Interactions.UnitTests
 
             FluidMoveBehavior.PurgeDeadStoryboards();
 
-            Assert.IsFalse(FluidMoveBehavior.TransitionStoryboardDictionary.ContainsKey(dataContextKey),
+            Assert.IsFalse(FluidMoveBehavior.StoryboardDictionaryContainsKey(dataContextKey),
                 "Storyboard entry with dead child in TagDictionary should be removed after purge.");
+        }
+
+        [TestMethod]
+        public void PurgeDeadStoryboards_RemovesOrphanedDataContextKey()
+        {
+            // A storyboard entry whose key has no corresponding TagDictionary entry
+            // should be removed as an orphan.
+            string orphanKey = "orphan-dc";
+            var storyboard = new Storyboard();
+
+            FluidMoveBehavior.InjectStoryboardEntry(orphanKey, storyboard);
+
+            // No TagDictionary entry for this key.
+            FluidMoveBehavior.PurgeDeadStoryboards();
+
+            Assert.IsFalse(FluidMoveBehavior.StoryboardDictionaryContainsKey(orphanKey),
+                "Storyboard entry with no corresponding TagDictionary entry should be removed.");
         }
 
         #endregion
