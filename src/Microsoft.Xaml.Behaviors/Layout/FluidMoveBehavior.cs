@@ -125,7 +125,7 @@ namespace Microsoft.Xaml.Behaviors.Layout
             /// <summary>
             /// Returns true if the Child WeakReference is still alive.
             /// </summary>
-            public bool IsAlive => _child != null;
+            public bool IsAlive => _child != null && _child.TryGetTarget(out _);
         }
 
         internal static Dictionary<object, TagData> TagDictionary = new Dictionary<object, TagData>();
