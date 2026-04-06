@@ -125,7 +125,7 @@ namespace Microsoft.Xaml.Behaviors.Layout
             /// <summary>
             /// Returns true if the Child WeakReference is still alive.
             /// </summary>
-            public bool IsAlive => _child != null && _child.TryGetTarget(out _);
+            public bool IsAlive => _child != null;
         }
 
         internal static Dictionary<object, TagData> TagDictionary = new Dictionary<object, TagData>();
@@ -178,7 +178,10 @@ namespace Microsoft.Xaml.Behaviors.Layout
                                   (pair.Key is FrameworkElement fe && !fe.IsLoaded);
                     if (isDead)
                     {
-                        if (deadTags == null) deadTags = new List<object>();
+                        if (deadTags == null)
+                        {
+                            deadTags = new List<object>();
+                        }
                         deadTags.Add(pair.Key);
                     }
                 }
@@ -186,7 +189,9 @@ namespace Microsoft.Xaml.Behaviors.Layout
                 if (deadTags != null)
                 {
                     foreach (object tag in deadTags)
+                    {
                         TagDictionary.Remove(tag);
+                    }
                 }
 
                 FluidMoveBehavior.PurgeDeadStoryboards();
@@ -225,7 +230,6 @@ namespace Microsoft.Xaml.Behaviors.Layout
             newTagData.Parent = VisualTreeHelper.GetParent(child) as FrameworkElement;
             newTagData.ParentRect = ExtendedVisualStateManager.GetLayoutRect(child);
             newTagData.Child = child;
-
 
             try
             {
@@ -471,7 +475,10 @@ namespace Microsoft.Xaml.Behaviors.Layout
 
                 if (isDead)
                 {
-                    if (deadTags == null) deadTags = new List<object>();
+                    if (deadTags == null)
+                    {
+                        deadTags = new List<object>();
+                    }
                     deadTags.Add(pair.Key);
                 }
             }
@@ -741,7 +748,6 @@ namespace Microsoft.Xaml.Behaviors.Layout
             tagData.AppRect = newTagData.AppRect;
             tagData.Parent = newTagData.Parent;
             tagData.Child = newTagData.Child;
-
         }
 
         private Storyboard CreateTransitionStoryboard(FrameworkElement child, bool usingBeforeLoaded, ref Rect layoutRect, ref Rect currentRect)

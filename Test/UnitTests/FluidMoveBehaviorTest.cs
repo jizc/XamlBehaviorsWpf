@@ -13,6 +13,13 @@ using Microsoft.Xaml.Behaviors.Layout;
 
 namespace Microsoft.Xaml.Interactions.UnitTests
 {
+    // Note: these tests touch static dictionaries (FluidMoveBehaviorBase.TagDictionary and
+    // FluidMoveBehavior's storyboard dictionary) and are therefore not safe for parallel
+    // execution. This is not a concern in practice for two reasons:
+    //   1. MSTest does not parallelize tests unless explicitly opted in via
+    //      [assembly: Parallelize] or a .runsettings file, neither of which is present here.
+    //   2. WPF objects are STA-thread-affine; even if parallelism were accidentally enabled,
+    //      the WPF runtime would throw before any dictionary race condition could occur.
     [TestClass]
     public class FluidMoveBehaviorTest
     {
@@ -22,6 +29,16 @@ namespace Microsoft.Xaml.Interactions.UnitTests
             // Clear static dictionaries before each test to avoid cross-test contamination.
             FluidMoveBehaviorBase.TagDictionary.Clear();
             FluidMoveBehavior.ClearStoryboardDictionary();
+        }
+
+        // Two GC.Collect() calls are required: the first collects unreachable objects and
+        // schedules their finalizers; WaitForPendingFinalizers runs those finalizers; the
+        // second collects the now-finalizable objects that were promoted during the first pass.
+        private static void ForceGC()
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
         }
 
         #region TagData WeakReference Tests
@@ -70,9 +87,7 @@ namespace Microsoft.Xaml.Interactions.UnitTests
             var tagData = new FluidMoveBehaviorBase.TagData();
             SetChildToEphemeralElement(tagData);
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            ForceGC();
 
             Assert.IsNull(tagData.Child);
         }
@@ -83,9 +98,7 @@ namespace Microsoft.Xaml.Interactions.UnitTests
             var tagData = new FluidMoveBehaviorBase.TagData();
             SetParentToEphemeralElement(tagData);
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            ForceGC();
 
             Assert.IsNull(tagData.Parent);
         }
@@ -96,9 +109,7 @@ namespace Microsoft.Xaml.Interactions.UnitTests
             var tagData = new FluidMoveBehaviorBase.TagData();
             SetChildToEphemeralElement(tagData);
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            ForceGC();
 
             Assert.IsFalse(tagData.IsAlive);
         }
@@ -126,9 +137,7 @@ namespace Microsoft.Xaml.Interactions.UnitTests
             string dataContextKey = "item1";
             AddEphemeralTagDataEntry(dataContextKey);
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            ForceGC();
 
             // The WeakReference should be dead now.
             Assert.IsTrue(FluidMoveBehaviorBase.TagDictionary.ContainsKey(dataContextKey),
@@ -260,9 +269,7 @@ namespace Microsoft.Xaml.Interactions.UnitTests
             FluidMoveBehavior.InjectStoryboardEntry(dataContextKey, storyboard);
             AddEphemeralTagDataEntry(dataContextKey);
 
-            GC.Collect();
-            GC.WaitForPendingFinalizers();
-            GC.Collect();
+            ForceGC();
 
             FluidMoveBehavior.PurgeDeadStoryboards();
 
