@@ -332,7 +332,6 @@ namespace Microsoft.Xaml.Behaviors.Layout
             tagData.AppRect = newTagData.AppRect;
             tagData.Parent = newTagData.Parent;
             tagData.Child = newTagData.Child;
-
         }
     }
 
